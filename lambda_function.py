@@ -1,15 +1,9 @@
 import json
 import boto3
-from cryptography.fernet import Fernet
+import base64
 
 s3 = boto3.client('s3')
 bucket = 'password-manager-1'
-
-def get_key():
-    key = Fernet.generate_key()
-    return key
-
-
 
 def lambda_handler(event, context):
     action = event.get('action', 'unknown')
@@ -38,19 +32,19 @@ def lambda_handler(event, context):
             username = event.get('username')
             password = event.get('password')  
 
-            # Encrypt 
-            key = get_key()
-            f = Fernet(key)
+            # Encode using base64
+            password_bytes = password.encode()
+            base64_bytes = base64.b64encode(password_bytes)
 
-            encrypted_password = f.encrypt(password).decode()
+            encoded_password = base64_bytes.decode()
 
             try:
-
                 response = s3.get_object(
                     Bucket = bucket,
                     Key = 'passwords.json'
                 )
 
+                # Store previous data and add onto it
                 prev_data = json.loads(response['Body'].read().decode('utf-8'))
 
             except:
@@ -59,9 +53,10 @@ def lambda_handler(event, context):
 
             prev_data[url] = {
                 'username': username,
-                'password': encrypted_password,
+                'password': encoded_password,
             }
 
+            # Update the password.json file in S3 bucket with updated data
             s3.put_object(
                 Body = json.dumps(prev_data),
                 Bucket = bucket,
@@ -74,7 +69,7 @@ def lambda_handler(event, context):
             }
 
         elif (action == "get"):
-            
+            # Optional parameter to decrypt all encrypted passwords when getting
             decrypt = event.get('decrypt', False)
 
             try:
@@ -86,25 +81,26 @@ def lambda_handler(event, context):
                 all_data = json.loads(response['Body'].read().decode('utf-8'))
 
                 if decrypt:
-                    # Decrypt 
-                    key = get_key()
-                    f = Fernet(key)
+                    # Decrypt (if existing password was never encrypted in the first place, just keep it in place)
+                    for urls in all_data:
+                        p = all_data[urls]['password']
 
-                    for url in all_data:
-                        p = all_data[url]['password']
+                        try:
+                            base64_bytes = p.encode()
+                            password_bytes = base64.b64decode(base64_bytes)
+                            decoded_password = password_bytes.decode()
+                        except:
+                            decoded_password = p
 
-                        decrypted_password = f.decrypt(p).decode()
-
-                        all_data[url]['password'] = decrypted_password
+                        all_data[urls]['password'] = decoded_password
 
                 return {
                     'statusCode': 200,
                     'body': json.dumps(all_data)
                 }
 
-            except:
-
-                return {
+            except Exception as e:
+                return {    
                     'statusCode': 404,
                     'body': json.dumps('Passwords not found!')
                 }
